@@ -149,13 +149,28 @@ static int lacrosse_r1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     else if (chk == 0 && b[10] != 0) {
         rev = 3; // LTV-R3 and TFA 30.3802.02
     }
-    else {
-        chk = crc8(b, 8, 0x31, 0x00);
-        if (b[10] != 0 || chk != 0) { // make sure this really is a LTV-R1 and not just a CRC collision
-            decoder_log(decoder, 1, __func__, "CRC failed!");
-            return DECODE_FAIL_MIC;
-        }
+else {
+    chk = crc8(b, 8, 0x31, 0x00);
+
+    // WL1 discriminator: high byte of raw_rain1 in decoded space
+    uint8_t wl1_state = (uint8_t)(b[5] ^ 0xAA);
+
+    if (chk != 0) {
+        decoder_log(decoder, 1, __func__, "CRC failed!");
+        return DECODE_FAIL_MIC;
     }
+
+    // If it matches WL1 signature, classify as WL1 even if b[10] != 0
+    if (wl1_state == 0x58 || wl1_state == 0xA8) {
+        rev = 11;  // NEW: WL1 leak sensor variant
+    } else if (b[10] != 0) {
+        // Keep the original collision guard for non-WL1 frames
+        decoder_log(decoder, 1, __func__, "Not R1 (b[10]!=0) and not WL1");
+        return DECODE_FAIL_OTHER;
+    }
+
+    // Otherwise rev stays 1 (R1)
+}
 
     decoder_log_bitrow(decoder, 1, __func__, b, bitbuffer->bits_per_row[0] - offset, "");
 
@@ -167,27 +182,26 @@ static int lacrosse_r1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int startup   = (b[3] & 0x40) >> 6;
     int seq       = (b[3] & 0x0e) >> 1;
     int raw_rain1 = ((b[5] ^ 0xaa) << 16) | (b[4] << 8) | (b[6]);
-uint8_t state_byte = (raw_rain1 >> 16) & 0xFF;
+    uint8_t state = (uint8_t)(b[5] ^ 0xAA);   // <-- THIS is the correct byte
+    if (rev == 11) {
+        // WL1: leak sensor, raw_rain1 is not rain
+        int leak = ((b[5] ^ 0xAA) == 0x58);   // wet == 0x58, dry == 0xA8
 
-/* LTV-WL1 leak sensor detection */
-if (state_byte == 0x58 || state_byte == 0xA8) {
-    int leak = (state_byte == 0x58);
-
-    data_t *data = data_make(
-        "model",      "", DATA_STRING, "LaCrosse-WL1",
-        "id",         "", DATA_FORMAT, "%06x", DATA_INT, id,
-        "leak",       "", DATA_INT, leak,
-        "battery_ok", "", DATA_INT, !batt_low,
-        "startup",    "", DATA_COND, startup, DATA_INT, startup,
-        "seq",        "", DATA_INT, seq,
-        "raw",        "", DATA_FORMAT, "0x%06X", DATA_INT, raw_rain1,
-        "mic",        "", DATA_STRING, "CRC",
-        NULL
-    );
+        data_t *data = data_make(
+            "model",      "", DATA_STRING, "LaCrosse-WL1",
+            "id",         "Sensor ID", DATA_INT, id,
+            "battery_ok", "Battery", DATA_INT, !batt_low,
+            "startup",    "Startup", DATA_INT, startup,
+            "seq",        "Sequence", DATA_INT, seq,
+            "leak",       "Leak", DATA_INT, leak,
+            "mic",        "Integrity", DATA_STRING, "CRC",
+            NULL
+        );
 
     decoder_output_data(decoder, data);
     return 1;
 }
+
     int raw_rain2 = ((b[8] ^ 0xaa) << 16) | (b[7] << 8) | (b[9]); // only LTV-R3
     int raw_wind  = (b[7] << 4) | (b[8] >> 4); // only LTV-W1/W2
 
