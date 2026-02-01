@@ -167,6 +167,27 @@ static int lacrosse_r1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int startup   = (b[3] & 0x40) >> 6;
     int seq       = (b[3] & 0x0e) >> 1;
     int raw_rain1 = ((b[5] ^ 0xaa) << 16) | (b[4] << 8) | (b[6]);
+uint8_t state_byte = (raw_rain1 >> 16) & 0xFF;
+
+/* LTV-WL1 leak sensor detection */
+if (state_byte == 0x58 || state_byte == 0xA8) {
+    int leak = (state_byte == 0x58);
+
+    data_t *data = data_make(
+        "model",      "", DATA_STRING, "LaCrosse-WL1",
+        "id",         "", DATA_FORMAT, "%06x", DATA_INT, id,
+        "leak",       "", DATA_INT, leak,
+        "battery_ok", "", DATA_INT, !batt_low,
+        "startup",    "", DATA_COND, startup, DATA_INT, startup,
+        "seq",        "", DATA_INT, seq,
+        "raw",        "", DATA_FORMAT, "0x%06X", DATA_INT, raw_rain1,
+        "mic",        "", DATA_STRING, "CRC",
+        NULL
+    );
+
+    decoder_output_data(decoder, data);
+    return 1;
+}
     int raw_rain2 = ((b[8] ^ 0xaa) << 16) | (b[7] << 8) | (b[9]); // only LTV-R3
     int raw_wind  = (b[7] << 4) | (b[8] >> 4); // only LTV-W1/W2
 
